@@ -1,0 +1,166 @@
+#!/usr/bin/perl -w
+
+use strict;
+
+my $suffix = $ARGV[0];
+my $min_rtt= $ARGV[1];
+my $dir = '/home/am2/anirudh/onramp/ns-allinone-2.35/ns2.35/tcl/ex/schedalgms/'.$suffix;
+
+my %protos;
+my %nsrcs;
+
+for ( glob "$dir/*$suffix" ) {
+  my ($protocol) = m{\Q$dir\E/(.*?)\.};
+  my ($nsrc) = m{nconn(\d+)};
+
+#  next if ( $protocol =~ m{XCP} );
+#  next if ( $protocol =~ m{CoDel} );
+#  next if ( $protocol =~ m{delta1$} );
+#  next if ( $protocol =~ m{0_5} );
+#  next if ( $protocol =~ m{2} );
+
+#  next if ( $protocol =~ m{^TCP-Linux-cubic$} );
+#  next if ( $protocol =~ m{TCP-Newreno} );
+#  next if ( $protocol =~ m{TCP-Linux-compound} );
+
+  $protos{ $nsrc }{ $protocol }{ filename } = $_;
+
+  print STDERR "protocol $protocol\n";
+}
+
+sub median {
+  my $n = scalar @_;
+  @_ = sort { $a <=> $b } @_;
+  my $median;
+  if ( $n % 2 == 1 ) {
+    $median = $_[ int($n / 2) ] + 0;
+  } else {
+    $median = $_[ int($n / 2) ] + $_[ int($n / 2) - 1 ];
+    $median /= 2;
+  }
+
+  return $median;
+}
+
+system( "rm -rf $dir/graphdir" );
+mkdir( "$dir/graphdir" ) or die "directory exists: $!";
+chdir( "$dir/graphdir" ) or die "can't enter directory: $!";
+
+for my $nsrc ( keys %protos ) {
+  my ( $rttmin, $rttmax ) = ( 10000000000, -10000000000 );
+  my ( $utilmin, $utilmax ) = ( 10000000000, -10000000000 );
+
+  for my $protocol ( keys %{ $protos{ $nsrc } } ) {
+    # make clean data
+
+    my $filename = $protos{ $nsrc }{ $protocol }{ filename };
+    my ( $rtt_tot, $util_tot, $count );
+
+    open DATA, $filename or die "can't open $filename !";
+    open ELLIPSE, "|/home/am2/anirudh/onramp/ns-allinone-2.35/ns2.35/tcl/ex/graphing-scripts/ellipsemaker > $protocol-$nsrc.ellipse" or die;
+    open RAWDATA, ">$protocol-$nsrc.pts" or die;
+    my @rtts = ();
+    my @utils = ();
+    while ( <DATA> ) {
+      next unless m{^conn:};
+
+      my ( $fct, $onperc, $util, $rtt ) = m{fctMs: (.*?) .*?onperc: (.*?) .*?utilization: (.*?) rtt95th (.*?)$};
+
+      $rtt -= $min_rtt;
+      push @rtts, $rtt + 0;
+      $rtt = log( $rtt ) / log( 2 );
+      print ELLIPSE "$rtt $util\n";
+      print RAWDATA "$rtt $util\n";
+      $count++;
+      $rtt_tot += $rtt;
+      $util_tot += $util;
+      push @utils, $util;
+    }
+    close ELLIPSE or die;
+    close RAWDATA or die;
+
+    my $rttmed = log( median( @rtts ) ) / log( 2 );
+
+    my $utilmed = median( @utils );
+
+    # find limits of ellipse
+    open ELLIPSEOUT, "$protocol-$nsrc.ellipse" or die;
+    while ( <ELLIPSEOUT> ) {
+      my ( $rtt, $util ) = split /\s+/, $_;
+      if ( $rtt > $rttmax ) { $rttmax = $rtt }
+      if ( $rtt < $rttmin ) { $rttmin = $rtt }
+      if ( $util > $utilmax ) { $utilmax = $util }
+      if ( $util < $utilmin ) { $utilmin = $util }
+    }
+    close ELLIPSEOUT or die;
+
+    $protos{ $nsrc }{ $protocol }{ means } = [ $rtt_tot / $count, $util_tot / $count ];
+    $protos{ $nsrc }{ $protocol }{ medians } = [ $rttmed, $utilmed ];
+  }
+
+  my @xtic_locations = map{ 2**$_ } ( 0 .. 15 );
+  my @xtic_strings = map { qq{"$_" log($_)/log(2)} } @xtic_locations;
+
+  my $xtic_instruction = qq{set xtics (} . (join ", ", @xtic_strings) . qq{)};
+
+  open GNUPLOT, ">graph-$nsrc.gnu" or die;
+
+#  $rttmin *= 0.8;
+#  $rttmax *= 1.1;
+#  $utilmin *= 0.8;
+#  $utilmax *= 1.1;
+
+  print GNUPLOT <<"HERE";
+set xrange [0:$rttmax] reverse
+set yrange [0:$utilmax]
+#set logscale x 2
+#set logscale y 2
+
+$xtic_instruction
+
+set xlabel "Queueing delay (ms)"
+set ylabel "Utilization (Percentage)"
+set grid
+
+#set title "15 Mbps dumbbell, Empirical distribution of flow lengths, nsrc $nsrc"
+
+unset key
+
+set terminal svg fsize 14
+set output "graph-$nsrc.svg"
+HERE
+
+
+  my @plotcmd;
+  my @dotcmd;
+
+  my $protocount = 1;
+  for my $protocol ( keys %{ $protos{ $nsrc } } ) {
+    my $nicename = $protocol;
+    $nicename =~ s{TCP-Rational}{RemyCC};
+    $nicename =~ s{TCP-Vegas}{Vegas};
+    $nicename =~ s{TCP-Linux-vegas}{Vegas}i;
+    $nicename =~ s{Cubic-sfqCoDel}{Cubic/sfqCoDel};
+    $nicename =~ s{TCP-Reno-XCP}{XCP};
+    $nicename =~ s{TCP-Newreno}{NewReno};
+    $nicename =~ s{TCP-Linux-cubic}{Cubic};
+    $nicename =~ s{TCP-Linux-compound}{Compound};
+
+#    $protos{ $nsrc }{ $protocol }{ means }[ 1 ] += .1;
+
+    print GNUPLOT qq<set label "$nicename" at $protos{ $nsrc }{ $protocol }{ medians }[ 0 ],$protos{ $nsrc }{ $protocol }{ medians }[ 1 ] point textcolor lt 1\n>;
+
+    push @plotcmd, qq<"$protocol-$nsrc.ellipse" with lines lt 1>;
+#    push @dotcmd, qq<"$protocol-$nsrc.pts" with dots lt $protocount>;
+
+    $protocount++;
+  }
+
+  my $plotcmd = join ", ", @plotcmd, @dotcmd;
+  print GNUPLOT "plot $plotcmd\nset output\n";
+
+  close GNUPLOT or die;
+
+  system( "gnuplot -p graph-$nsrc.gnu" );
+  system( "inkscape --export-png=graph-$nsrc.png -b '#ffffff' -D graph-$nsrc.svg" );
+}
