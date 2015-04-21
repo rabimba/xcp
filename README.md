@@ -16,12 +16,12 @@ Once that is done run the following in the terminal and it should bring up the g
     
 The topology we try to emulate here is (you can change it of course)
 
-#--------- Creating the TOPOLOGY --------------------#
-#       n0                             
-#       : \   Bottleneck            
-#       :  R0-----------------------R1
-#         /                            
-#       ni                         
-#
+--------- Creating the TOPOLOGY --------------------
+       n0                             
+       : \   Bottleneck            
+       :  R0-----------------------R1
+         /                            
+       ni                         
+
 
 ### Done as part of COMP 529 ###
