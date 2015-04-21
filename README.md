@@ -13,3 +13,5 @@ This should install xgraph which we will be using to create the graphs.
 Once that is done run the following in the terminal and it should bring up the graphs
 
     ns chagolchana.tcl
+
+### Done as part of COMP 529 ###
